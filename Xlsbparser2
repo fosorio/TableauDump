@@ -1,0 +1,96 @@
+import org.apache.poi.openxml4j.opc.OPCPackage;
+import org.apache.poi.ss.usermodel.DataFormatter;
+import org.apache.poi.xssf.binary.XSSFBSharedStringsTable;
+import org.apache.poi.xssf.binary.XSSFBSheetHandler;
+import org.apache.poi.xssf.binary.XSSFBStylesTable;
+import org.apache.poi.xssf.eventusermodel.XSSFBReader;
+import org.apache.poi.xssf.eventusermodel.XSSFSheetXMLHandler;
+import org.apache.poi.xssf.usermodel.XSSFComment;
+
+import java.io.InputStream;
+import java.util.HashMap;
+import java.util.Map;
+
+public class XlsbReaderExample {
+    // SheetContentsHandler implementation to build a Map from two columns
+    static class SheetToMap implements XSSFSheetXMLHandler.SheetContentsHandler {
+        private Map<String, String> map = new HashMap<>();
+        private String currentKey; 
+        private String currentValue;
+
+        @Override
+        public void startRow(int rowNum) {
+            currentKey = null;
+            currentValue = null;
+        }
+
+        @Override
+        public void endRow(int rowNum) {
+            // If a key was read in this row, put the pair into the map
+            if (currentKey != null) {
+                map.put(currentKey, (currentValue != null ? currentValue : ""));
+            }
+        }
+
+        @Override
+        public void cell(String cellReference, String formattedValue, XSSFComment comment) {
+            // Use DataFormatter output (already formattedValue)
+            String value = (formattedValue == null ? "" : formattedValue);
+            // Determine column by cell reference (e.g., "A1", "B1", etc.)
+            if (cellReference.startsWith("A")) {      // first column (Key)
+                currentKey = value;
+            } else if (cellReference.startsWith("B")) { // second column (Value)
+                currentValue = value;
+            }
+        }
+
+        @Override
+        public void headerFooter(String text, boolean isHeader, String tagName) {
+            // Not used in this context
+        }
+
+        /** Getter to retrieve the populated map */
+        public Map<String, String> getMap() {
+            return map;
+        }
+    }
+
+    public static Map<String, String> readXlsbFile(String filePath) throws Exception {
+        // Open the .xlsb file as a POI OPCPackage
+        try (OPCPackage pkg = OPCPackage.open(filePath)) {
+            XSSFBReader reader = new XSSFBReader(pkg);
+            XSSFBSharedStringsTable strings = new XSSFBSharedStringsTable(pkg);
+            XSSFBStylesTable styles = reader.getXSSFBStylesTable();
+            XSSFBReader.SheetIterator sheets = (XSSFBReader.SheetIterator) reader.getSheetsData();
+
+            Map<String, String> resultMap = new HashMap<>();
+            DataFormatter formatter = new DataFormatter();
+            // Iterate over sheets (in case there are multiple sheets)
+            while (sheets.hasNext()) {
+                try (InputStream sheetStream = sheets.next()) {
+                    String sheetName = sheets.getSheetName();
+                    if (!"Sheet1".equals(sheetName)) {
+                        continue; // skip other sheets if only Sheet1 is needed
+                    }
+                    // Set up the handler for this sheet
+                    SheetToMap handler = new SheetToMap();
+                    XSSFBSheetHandler sheetHandler = new XSSFBSheetHandler(
+                            sheetStream, styles, sheets.getXSSFBSheetComments(),
+                            strings, handler, formatter, false);
+                    sheetHandler.parse();  // parse the sheet
+                    resultMap.putAll(handler.getMap());
+                    break; // since we've got Sheet1, we can break out
+                }
+            }
+            return resultMap;
+        }
+    }
+
+    // Example usage
+    public static void main(String[] args) throws Exception {
+        Map<String, String> data = readXlsbFile("path/to/workbook.xlsb");
+        System.out.println("Loaded " + data.size() + " entries:");
+        data.forEach((key, value) -> 
+            System.out.println(key + " = " + value));
+    }
+}
